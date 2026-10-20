@@ -93,6 +93,13 @@ _gcloud_auth_core_prop() {
   done < "$file"
 }
 
+# quota_project_id in an account's ADC file (empty if none).
+_gcloud_auth_adc_quota_project() {
+  local file=$GCLOUD_ACCOUNTS_DIR/$1/application_default_credentials.json
+  [[ -r $file ]] || return
+  sed -n 's/.*"quota_project_id": *"\([^"]*\)".*/\1/p' "$file" | head -1
+}
+
 _gcloud_auth_chpwd() {
   emulate -L zsh
   [[ -n $GCLOUD_AUTH_PINNED ]] && return
@@ -141,9 +148,9 @@ _gcloud_auth_cmd_use() {
 }
 
 _gcloud_auth_cmd_add_account() {
-  local name=$1
+  local name=$1 project=$2
   if [[ -z $name ]]; then
-    print -u2 "Usage: gcloud-auth add-account <name>"
+    print -u2 "Usage: gcloud-auth add-account <name> [project-id]"
     return 1
   fi
   if [[ ! $name =~ '^[A-Za-z0-9_-]+$' ]]; then
@@ -165,6 +172,12 @@ _gcloud_auth_cmd_add_account() {
     return 1
   fi
 
+  # set before the ADC login so it is also recorded as the ADC quota project
+  if [[ -n $project ]] && ! CLOUDSDK_CONFIG=$dir gcloud config set project "$project"; then
+    print -u2 "Could not set project '$project'. Continuing without it."
+    project=
+  fi
+
   print
   print "Log in for Application Default Credentials..."
   # unset so the ADC login is not confused by another account's file
@@ -177,10 +190,9 @@ _gcloud_auth_cmd_add_account() {
   local account
   account=$(_gcloud_auth_core_prop "$name" account)
   print
-  print "Registered account '$name'${account:+ ($account)}."
-  print "Set its default project with:"
-  print "  CLOUDSDK_CONFIG=$dir gcloud config set project <project-id>"
+  print "Registered account '$name'${account:+ ($account)}${project:+, project $project}."
   print "Switch to it with: gcloud-auth $name"
+  [[ -z $project ]] && print "Then set its project with: gcloud-auth set-project <project-id>"
 
   # re-apply in case the current folder or pin already points at this name
   if [[ $GCLOUD_AUTH_NAME == $name ]]; then
@@ -218,6 +230,27 @@ _gcloud_auth_cmd_add_dir() {
   _gcloud_auth_chpwd
 }
 
+_gcloud_auth_cmd_set_project() {
+  local project=$1
+  if [[ -z $project ]]; then
+    print -u2 "Usage: gcloud-auth set-project <project-id>"
+    return 1
+  fi
+  if [[ -z $GCLOUD_AUTH_NAME ]]; then
+    print -u2 "No account selected. Run: gcloud-auth <name>"
+    return 1
+  fi
+
+  gcloud config set project "$project" || return 1
+
+  if [[ -r $CLOUDSDK_CONFIG/application_default_credentials.json ]]; then
+    # unset so gcloud edits this account's ADC file, not one set outside gcloud-auth
+    GOOGLE_APPLICATION_CREDENTIALS= gcloud auth application-default set-quota-project "$project" || return 1
+  else
+    print "No ADC file for '$GCLOUD_AUTH_NAME' yet; only the gcloud project was set."
+  fi
+}
+
 _gcloud_auth_cmd_status() {
   if [[ -z $GCLOUD_AUTH_NAME ]]; then
     print "account    : (none, using ~/.config/gcloud as if gcloud-auth were not installed)"
@@ -225,14 +258,22 @@ _gcloud_auth_cmd_status() {
     print "ADC        : ${GOOGLE_APPLICATION_CREDENTIALS:-(default location)}"
     return
   fi
-  local account project
+  local account project quota
   account=$(_gcloud_auth_core_prop "$GCLOUD_AUTH_NAME" account)
   project=$(_gcloud_auth_core_prop "$GCLOUD_AUTH_NAME" project)
+  quota=$(_gcloud_auth_adc_quota_project "$GCLOUD_AUTH_NAME")
   print "account    : $GCLOUD_AUTH_NAME${account:+ ($account)}"
   print "project    : ${project:-(not set)}"
   print "config dir : $CLOUDSDK_CONFIG"
   if [[ -n $_GCLOUD_AUTH_ADC ]]; then
     print "ADC        : $GOOGLE_APPLICATION_CREDENTIALS"
+    if [[ -z $quota ]]; then
+      print "quota proj : (not set; run: gcloud-auth set-project <project-id>)"
+    elif [[ -n $project && $quota != $project ]]; then
+      print "quota proj : $quota (differs from project; run: gcloud-auth set-project $project)"
+    else
+      print "quota proj : $quota"
+    fi
   elif [[ -n $GOOGLE_APPLICATION_CREDENTIALS ]]; then
     print "ADC        : $GOOGLE_APPLICATION_CREDENTIALS (set outside gcloud-auth, takes precedence)"
   else
@@ -250,8 +291,10 @@ _gcloud_auth_cmd_help() {
 Usage:
   gcloud-auth                      pick an account from a list (pinned for this terminal)
   gcloud-auth <name>               switch to the given account (pinned for this terminal)
-  gcloud-auth add-account <name>   register an account and log in (gcloud and ADC)
+  gcloud-auth add-account <name> [project-id]
+                                   register an account and log in (gcloud and ADC)
   gcloud-auth add-dir <name>       use the given account in the current folder
+  gcloud-auth set-project <id>     set the project and ADC quota project of the current account
   gcloud-auth status               show the current account
   gcloud-auth help                 show this help
 
@@ -268,8 +311,9 @@ gcloud-auth() {
   local cmd=$1
   case $cmd in
     "")            _gcloud_auth_cmd_list ;;
-    add-account)   _gcloud_auth_cmd_add_account "$2" ;;
+    add-account)   _gcloud_auth_cmd_add_account "$2" "$3" ;;
     add-dir)       _gcloud_auth_cmd_add_dir "$2" ;;
+    set-project)   _gcloud_auth_cmd_set_project "$2" ;;
     status)        _gcloud_auth_cmd_status ;;
     help|-h|--help) _gcloud_auth_cmd_help ;;
     *)             _gcloud_auth_cmd_use "$cmd" ;;

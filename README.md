@@ -42,8 +42,10 @@ Open a new terminal or re-source `.zshrc` afterwards.
 ```
 gcloud-auth                      pick an account from a numbered list
 gcloud-auth <name>               switch to the given account
-gcloud-auth add-account <name>   register an account (creates the directory, then logs in to gcloud and ADC via browser)
+gcloud-auth add-account <name> [project-id]
+                                 register an account (creates the directory, then logs in to gcloud and ADC via browser)
 gcloud-auth add-dir <name>       use the given account in the current folder
+gcloud-auth set-project <id>     set the project and ADC quota project of the current account
 gcloud-auth status               show the current account
 gcloud-auth help                 show help
 ```
@@ -53,15 +55,23 @@ gcloud-auth help                 show help
 ### Typical flow
 
 ```sh
-gcloud-auth add-account personal   # register an account (two browser logins: gcloud, then ADC)
-gcloud-auth personal
-gcloud config set project my-project            # per-account default project
-gcloud-auth add-account work
+gcloud-auth add-account personal my-project    # register an account (two browser logins: gcloud, then ADC)
+gcloud-auth add-account work work-project
 cd ~ && gcloud-auth add-dir personal            # use personal everywhere under your home folder...
 cd ~/projects/acme && gcloud-auth add-dir work  # ...except here, where work is used
 ```
 
 Every account, including ones already logged in under `~/.config/gcloud`, is registered with `add-account`, so you log in once more for each.
+
+## Projects and quota projects
+
+ADC made from a user login needs a quota project, the project that API usage is billed and rate-limited against. Without one, client libraries print a warning and some APIs reject the request.
+
+- `add-account <name> <project-id>` sets the gcloud project before the ADC login, so the same project is recorded as the ADC quota project.
+- `set-project <project-id>` changes both for the current account: `gcloud config set project` and `gcloud auth application-default set-quota-project`. Use it instead of `gcloud config set project`, which leaves the ADC quota project unchanged.
+- `status` shows the quota project and warns when it is missing or differs from the gcloud project.
+
+Setting a quota project requires the `serviceusage.services.use` permission on that project.
 
 ## Switching rules
 
